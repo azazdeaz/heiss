@@ -9,7 +9,7 @@ import koaStatic from 'koa-static';
 import koaWebsocket = require('koa-websocket');
 import koaMount from 'koa-mount';
 import * as WebSocket from 'ws';
-import { generateProxyMiddleware } from './generateProxyMiddleware';
+import { generateProxyMiddleware, Transpiler } from './generateProxyMiddleware';
 import { hmrEntryMiddleware } from './hmrEntryMiddleware';
 import { Message, MessageType } from './message';
 
@@ -19,11 +19,14 @@ export interface ServerOptions {
     port: number;
     host: string;
     directory: string;
+    transpiler?: Transpiler;
+    pathResolver?: (path: string) => string | Promise<string>;
+    wsMessageHandler?: (message: any) => void;
 }
 
 export class Server {
     private sockets: Set<WebSocket>;
-    private app: koaWebsocket.App;
+    app: koaWebsocket.App;
     private options: ServerOptions;
     private rootURL: URL;
 
@@ -71,7 +74,13 @@ export class Server {
     }
 
     private setupAppMiddleware() {
-        this.app.use(generateProxyMiddleware({ rootPath: this.options.directory }));
+        this.app.use(
+            generateProxyMiddleware({
+                rootPath: this.options.directory,
+                transpiler: this.options.transpiler,
+                pathResolver: this.options.pathResolver
+            })
+        );
         this.app.use(koaStatic(this.options.directory));
     }
 
@@ -85,6 +94,9 @@ export class Server {
             console.log('socket disconnected');
             this.sockets.delete(websocket);
         });
+        if (this.options.wsMessageHandler) {
+            websocket.on('message', this.options.wsMessageHandler);
+        }
     }
 
     broadcast(message: Message) {

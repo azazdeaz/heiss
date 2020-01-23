@@ -4,27 +4,27 @@ import send from 'koa-send';
 import { Middleware } from 'koa';
 import { generateHmrProxy } from './generateHmrProxy';
 
+interface TranspilerOptions {
+    content: string;
+    path: string;
+}
+export type Transpiler = (options: TranspilerOptions) => string | Promise<string>;
+
 interface Options {
     rootPath: string;
+    transpiler?: Transpiler;
+    pathResolver?: (path: string) => string | Promise<string>;
 }
 export function generateProxyMiddleware(options: Options): Middleware {
     return async (context, next) => {
         const requestPath = context.request.path;
-        if (!/\.(js|mjs)$/.test(requestPath)) {
-            return next();
-        }
-        const filePath = path.join(options.rootPath, requestPath);
 
-        if (context.request.query.mtime) {
-            await send(context, requestPath, {
-                root: options.rootPath
-            });
-            return;
-        }
+        const fullPath = path.join(options.rootPath, requestPath);
+        const filePath = options.pathResolver ? await options.pathResolver(fullPath) : fullPath;
 
-        let content;
+        let originalContent;
         try {
-            content = await fs.readFile(filePath, 'utf8');
+            originalContent = await fs.readFile(filePath, 'utf8');
         } catch (e) {
             if (e.code === 'ENOENT') {
                 return next();
@@ -32,7 +32,15 @@ export function generateProxyMiddleware(options: Options): Middleware {
             throw e;
         }
 
+        const transpiledContent = options.transpiler
+            ? await options.transpiler({ content: originalContent, path: filePath })
+            : originalContent;
+
         context.response.set('Content-Type', 'application/javascript');
-        context.response.body = generateHmrProxy(content, context.request.URL);
+        if (!context.request.query.mtime) {
+            context.response.body = generateHmrProxy(transpiledContent, context.request.URL);
+        } else {
+            context.response.body = transpiledContent;
+        }
     };
 }
